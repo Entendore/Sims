@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import random
-import math
 from collections import Counter
 
 # ------------------------------
@@ -16,7 +15,7 @@ NUM_FOOD = 80
 
 MUTATION_RATE = 0.1
 MCTS_SIMULATIONS = 3
-MCTS_DEPTH = 2
+MCTS_DEPTH = 3
 
 PREY_ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT", "STAY"]
 PREDATOR_ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT", "STAY", "HUNT"]
@@ -40,16 +39,6 @@ class Prey:
         self.energy = energy
         self.lineage = lineage if lineage else [id(self)]
 
-    def get_state(self, food_list, predator_list):
-        nearest_food = min(food_list, key=lambda f: abs(f.x-self.x)+abs(f.y-self.y), default=None)
-        nearest_pred = min(predator_list, key=lambda p: abs(p.x-self.x)+abs(p.y-self.y), default=None)
-        return (self.x, self.y,
-                nearest_food.x if nearest_food else -1,
-                nearest_food.y if nearest_food else -1,
-                nearest_pred.x if nearest_pred else -1,
-                nearest_pred.y if nearest_pred else -1,
-                self.energy)
-
     def select_action(self, food_list, predator_list):
         best_action = "STAY"
         best_reward = -float('inf')
@@ -72,12 +61,16 @@ class Prey:
         new_y = max(0, min(new_y, GRID_HEIGHT-1))
 
         reward = -self.metabolism
+
         for f in food_list:
             if f.x==new_x and f.y==new_y:
                 reward += 10
         for p in predator_list:
-            if abs(p.x-new_x)+abs(p.y-new_y) < 2:
+            dist = abs(p.x-new_x)+abs(p.y-new_y)
+            if dist < 2:
                 reward -= 5*(1-self.agility)
+            else:
+                reward += 0.2*dist  # bonus for staying far
 
         if depth <= 1:
             return reward
@@ -136,8 +129,12 @@ class Predator:
 
         reward = -self.stamina
         for p in prey_list:
-            if abs(p.x-new_x)+abs(p.y-new_y) < 2:
+            dist = abs(p.x-new_x)+abs(p.y-new_y)
+            if dist < 2:
                 reward += 10*self.aggressiveness
+            else:
+                old_dist = abs(p.x-self.x)+abs(p.y-self.y)
+                reward += max(0, old_dist-dist)
 
         if depth <= 1:
             return reward
@@ -168,9 +165,6 @@ class Predator:
 def spawn_food(num):
     return [Food(random.randint(0, GRID_WIDTH-1), random.randint(0, GRID_HEIGHT-1)) for _ in range(num)]
 
-def distance(a, b):
-    return abs(a.x - b.x) + abs(a.y - b.y)
-
 def get_lineage_color(lineage_id):
     random.seed(lineage_id)
     return (random.random(), random.random(), random.random())
@@ -192,14 +186,13 @@ def average_trait(entities, trait):
     return sum(getattr(e, trait) for e in entities)/len(entities)
 
 # ------------------------------
-# SIMULATION INITIALIZATION
+# SIMULATION INIT
 # ------------------------------
 prey_list = [Prey(random.randint(0, GRID_WIDTH-1), random.randint(0, GRID_HEIGHT-1)) for _ in range(NUM_PREY)]
 predator_list = [Predator(random.randint(0, GRID_WIDTH-1), random.randint(0, GRID_HEIGHT-1)) for _ in range(NUM_PREDATORS)]
 food_list = spawn_food(NUM_FOOD)
 
 fig, (ax_grid, ax_traits) = plt.subplots(2, 1, figsize=(10,12))
-
 prey_speed_history, prey_vision_history, predator_speed_history, predator_vision_history = [], [], [], []
 
 # ------------------------------
@@ -212,7 +205,7 @@ def update(frame):
     ax_grid.set_ylim(0, GRID_HEIGHT)
     ax_grid.set_title(f"Predator-Prey Simulation Step {frame}")
 
-    # ---- Update Prey ----
+    # ---- Prey Update ----
     new_prey = []
     for prey in prey_list:
         action = prey.select_action(food_list, predator_list)
@@ -230,7 +223,7 @@ def update(frame):
     prey_list.extend(new_prey)
     prey_list = [p for p in prey_list if p.energy>0]
 
-    # ---- Update Predators ----
+    # ---- Predator Update ----
     new_predators = []
     for pred in predator_list:
         action = pred.select_action(prey_list)
@@ -239,7 +232,7 @@ def update(frame):
 
         eaten_prey = [p for p in prey_list if p.x==pred.x and p.y==pred.y]
         for p in eaten_prey:
-            pred.energy += p.energy * pred.aggressiveness
+            pred.energy += p.energy*pred.aggressiveness
             prey_list.remove(p)
 
         child = pred.reproduce()
@@ -252,14 +245,10 @@ def update(frame):
     if random.random()<0.1:
         food_list.append(Food(random.randint(0, GRID_WIDTH-1), random.randint(0, GRID_HEIGHT-1)))
 
-    # ---- Draw Food ----
+    # ---- Draw Entities ----
     ax_grid.scatter([f.x for f in food_list], [f.y for f in food_list], c='yellow', marker='s', label='Food')
-    # ---- Draw Prey ----
-    prey_colors = highlight_lineage_colors(prey_list)
-    ax_grid.scatter([p.x for p in prey_list], [p.y for p in prey_list], c=prey_colors, marker='o', label='Prey')
-    # ---- Draw Predators ----
-    pred_colors = highlight_lineage_colors(predator_list)
-    ax_grid.scatter([pr.x for pr in predator_list], [pr.y for pr in predator_list], c=pred_colors, marker='^', label='Predator')
+    ax_grid.scatter([p.x for p in prey_list], [p.y for p in prey_list], c=highlight_lineage_colors(prey_list), marker='o', label='Prey')
+    ax_grid.scatter([pr.x for pr in predator_list], [pr.y for pr in predator_list], c=highlight_lineage_colors(predator_list), marker='^', label='Predator')
     ax_grid.legend(loc='upper right')
 
     # ---- Update Trait Evolution ----
