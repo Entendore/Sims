@@ -1,4 +1,4 @@
-import sys, json, numpy as np
+import sys, numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QComboBox, QCheckBox, QFileDialog
@@ -21,13 +21,13 @@ QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundin
 # CELLULAR AUTOMATA CLASS
 # ----------------------------
 class CellularAutomata:
-    def __init__(self, shape=(30,30), density=0.25, birth=[3], survive=[2,3], name="Custom"):
+    def __init__(self, shape=(50,50), birth=[3], survive=[2,3], name="Custom"):
         self.rows, self.cols = shape
         self.birth = birth
         self.survive = survive
         self.name = name
-        self.grid = np.random.rand(self.rows,self.cols)<density
-        self.age = np.zeros_like(self.grid, dtype=int)
+        self.grid = np.random.randint(0,2,(self.rows,self.cols),dtype=int)
+        self.age = np.zeros((self.rows,self.cols), dtype=int)
 
     def step(self):
         new_grid = np.zeros_like(self.grid)
@@ -37,38 +37,53 @@ class CellularAutomata:
                 total = np.sum(self.grid[max(i-1,0):i+2, max(j-1,0):j+2]) - self.grid[i,j]
                 if self.grid[i,j]:
                     if total in self.survive:
-                        new_grid[i,j]=1
-                        new_age[i,j]=self.age[i,j]+1
+                        new_grid[i,j] = 1
+                        new_age[i,j] = self.age[i,j]+1
                 else:
                     if total in self.birth:
-                        new_grid[i,j]=1
-                        new_age[i,j]=1
-        self.grid=new_grid
-        self.age=new_age
-        return self.grid,new_age
+                        new_grid[i,j] = 1
+                        new_age[i,j] = 1
+        self.grid = new_grid
+        self.age = new_age
+        return self.grid, self.age
 
 # ----------------------------
-# AUDIO GENERATION
+# CLUSTER-SPECIFIC AUDIO
 # ----------------------------
-def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics, waveform='sine'):
-    t = np.linspace(0,duration,int(rate*duration),endpoint=False)
+def generate_audio_cluster_advanced(grid, ages, rate, duration, base_freq, default_freq_range,
+                                    default_harmonics, default_waveform='sine'):
+    t = np.linspace(0, duration, int(rate*duration), endpoint=False)
     signal_left = np.zeros_like(t)
     signal_right = np.zeros_like(t)
     labeled, num_features = label(grid>0)
-    max_age = max(1,np.max(ages))
-    rows,cols = grid.shape
+    max_age = max(1, np.max(ages))
+    rows, cols = grid.shape
+
+    # Cluster parameters
+    waveform_types = ['sine','square','saw','triangle']
+    cluster_waveforms = {}
+    cluster_freq_ranges = {}
+    cluster_harmonics = {}
+    for c in range(1,num_features+1):
+        cluster_waveforms[c] = waveform_types[(c-1) % len(waveform_types)]
+        cluster_freq_ranges[c] = default_freq_range*(0.8 + 0.1*c)
+        cluster_harmonics[c] = [h*(1+c%3) for h in default_harmonics]
 
     def waveform_func(freq, t, type):
         if type=='sine': return np.sin(2*np.pi*freq*t)
         elif type=='square': return np.sign(np.sin(2*np.pi*freq*t))
         elif type=='saw': return 2*(t*freq - np.floor(t*freq + 0.5))
-        elif type=='triangle': return 2*np.abs(2*(t*freq - np.floor(t*freq + 0.5))) -1
+        elif type=='triangle': return 2*np.abs(2*(t*freq - np.floor(t*freq + 0.5)))-1
         return np.sin(2*np.pi*freq*t)
 
     for i in range(rows):
         for j in range(cols):
             if grid[i,j]:
                 cluster = labeled[i,j]
+                waveform = cluster_waveforms.get(cluster, default_waveform)
+                freq_range = cluster_freq_ranges.get(cluster, default_freq_range)
+                harmonics = cluster_harmonics.get(cluster, default_harmonics)
+
                 cluster_size = np.sum(labeled==cluster)
                 freq = base_freq + (ages[i,j]/max_age)*freq_range + cluster_size*10
                 amp = 0.2*(ages[i,j]/max_age)
@@ -80,12 +95,12 @@ def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics,
                 signal_right += cell_signal*pan
 
     max_val = max(np.max(np.abs(signal_left)), np.max(np.abs(signal_right)), 1e-6)
-    signal_left/=max_val
-    signal_right/=max_val
+    signal_left /= max_val
+    signal_right /= max_val
     return np.stack([signal_left, signal_right], axis=-1)
 
 # ----------------------------
-# PROFESSIONAL PRESETS
+# PRESETS
 # ----------------------------
 PRESETS = {
     "Conway":{"birth":[3],"survive":[2,3],"waveform":"sine"},
@@ -95,7 +110,7 @@ PRESETS = {
 }
 
 # ----------------------------
-# QT6 GUI
+# GUI
 # ----------------------------
 class CAStudio(QWidget):
     def __init__(self):
@@ -104,24 +119,24 @@ class CAStudio(QWidget):
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
 
-        # Initialize CA with Conway preset
+        # Initialize CA
         preset = PRESETS["Conway"]
         self.ca = CellularAutomata(name="Conway", birth=preset["birth"], survive=preset["survive"])
         self.current_waveform = preset["waveform"]
 
-        # Rule selection
+        # Preset selector
         self.rule_combo = QComboBox()
         self.rule_combo.addItems(PRESETS.keys())
         self.rule_combo.currentTextChanged.connect(self.load_preset)
         self.layout.addWidget(QLabel("Select Rule Preset:"))
         self.layout.addWidget(self.rule_combo)
 
-        # Dynamic Rule Editor
+        # Rule editor
         rule_layout = QHBoxLayout()
         self.birth_input = QLineEdit(",".join(map(str,self.ca.birth)))
         self.survive_input = QLineEdit(",".join(map(str,self.ca.survive)))
         self.waveform_combo = QComboBox()
-        self.waveform_combo.addItems(["sine","square","saw","triangle"])
+        self.waveform_combo.addItems(['sine','square','saw','triangle'])
         self.waveform_combo.setCurrentText(self.current_waveform)
         rule_layout.addWidget(QLabel("Birth (B):"))
         rule_layout.addWidget(self.birth_input)
@@ -158,8 +173,8 @@ class CAStudio(QWidget):
         self.figure, self.ax = plt.subplots(figsize=(6,6))
         self.canvas = FigureCanvas(self.figure)
         self.layout.addWidget(self.canvas)
-        self.img = self.ax.imshow(self.ca.age, cmap='tab20', interpolation='nearest')
-        self.ax.set_title("Cellular Automata")
+        self.img = self.ax.imshow(self.ca.age, cmap='tab20', vmin=0, vmax=10, interpolation='nearest')
+        self.ax.set_title("Cellular Automata (Age/Cluster)")
         self.anim = None
 
         # Simulation config
@@ -172,7 +187,7 @@ class CAStudio(QWidget):
         self.config_harmonics = [1,2,3]
 
     # ----------------------------
-    # Load Preset
+    # Preset loader
     # ----------------------------
     def load_preset(self, name):
         preset = PRESETS[name]
@@ -185,7 +200,7 @@ class CAStudio(QWidget):
         self.ca.name = name
 
     # ----------------------------
-    # Update Rules
+    # Update rule
     # ----------------------------
     def update_rule(self):
         try:
@@ -205,7 +220,7 @@ class CAStudio(QWidget):
         self.update_rule()
         self.anim = FuncAnimation(self.figure, self.update_frame,
                                   frames=self.config_frames,
-                                  interval=1000/self.config_fps, blit=True)
+                                  interval=1000/self.config_fps, blit=False)
         self.canvas.draw()
 
     def pause_simulation(self):
@@ -214,20 +229,25 @@ class CAStudio(QWidget):
     def update_frame(self, frame):
         grid, age = self.ca.step()
         labeled,_ = label(grid>0)
-        self.img.set_data(labeled)
+        # Display clusters with age mapping
+        self.img.set_data(age + labeled*2)  # combine age + cluster for color variation
+        self.img.set_clim(vmin=0, vmax=max(10,np.max(age+labeled*2)))
         if self.audio_checkbox.isChecked():
-            chunk = generate_audio(grid, age,
-                                   self.config_audio_rate,
-                                   self.config_audio_chunk,
-                                   self.config_base_freq,
-                                   self.config_freq_range,
-                                   self.config_harmonics,
-                                   self.current_waveform)
+            chunk = generate_audio_cluster_advanced(
+                grid, age,
+                self.config_audio_rate,
+                self.config_audio_chunk,
+                self.config_base_freq,
+                self.config_freq_range,
+                self.config_harmonics,
+                self.current_waveform
+            )
             sd.play(chunk, self.config_audio_rate, blocking=False)
+        self.canvas.draw()
         return [self.img]
 
     # ----------------------------
-    # Export Functions
+    # Export
     # ----------------------------
     def export_video_audio(self):
         video_file,_ = QFileDialog.getSaveFileName(self,"Save Video","","MP4 Files (*.mp4)")
@@ -236,21 +256,24 @@ class CAStudio(QWidget):
             self.update_rule()
             audio_frames=[]
             fig, ax = plt.subplots(figsize=(6,6))
-            img=ax.imshow(self.ca.age, cmap='tab20', interpolation='nearest')
+            img=ax.imshow(self.ca.age, cmap='tab20', vmin=0, vmax=10, interpolation='nearest')
             writer = FFMpegWriter(fps=self.config_fps, bitrate=1800)
             with writer.saving(fig, video_file, dpi=100):
                 for f in range(self.config_frames):
                     grid, age = self.ca.step()
                     labeled,_ = label(grid>0)
-                    img.set_data(labeled)
+                    img.set_data(age + labeled*2)
+                    img.set_clim(vmin=0, vmax=max(10,np.max(age+labeled*2)))
                     writer.grab_frame()
-                    chunk = generate_audio(grid, age,
-                                           self.config_audio_rate,
-                                           self.config_audio_chunk,
-                                           self.config_base_freq,
-                                           self.config_freq_range,
-                                           self.config_harmonics,
-                                           self.current_waveform)
+                    chunk = generate_audio_cluster_advanced(
+                        grid, age,
+                        self.config_audio_rate,
+                        self.config_audio_chunk,
+                        self.config_base_freq,
+                        self.config_freq_range,
+                        self.config_harmonics,
+                        self.current_waveform
+                    )
                     audio_frames.append(chunk)
             full_audio = np.concatenate(audio_frames, axis=0)
             write(audio_file, self.config_audio_rate, (full_audio*32767).astype(np.int16))
@@ -263,20 +286,22 @@ class CAStudio(QWidget):
             audio_frames=[]
             for f in range(self.config_frames):
                 grid, age = self.ca.step()
-                chunk = generate_audio(grid, age,
-                                       self.config_audio_rate,
-                                       self.config_audio_chunk,
-                                       self.config_base_freq,
-                                       self.config_freq_range,
-                                       self.config_harmonics,
-                                       self.current_waveform)
+                chunk = generate_audio_cluster_advanced(
+                    grid, age,
+                    self.config_audio_rate,
+                    self.config_audio_chunk,
+                    self.config_base_freq,
+                    self.config_freq_range,
+                    self.config_harmonics,
+                    self.current_waveform
+                )
                 audio_frames.append(chunk)
             full_audio = np.concatenate(audio_frames, axis=0)
             write(audio_file, self.config_audio_rate, (full_audio*32767).astype(np.int16))
             print(f"Exported audio: {audio_file}")
 
 # ----------------------------
-# RUN APP
+# Run App
 # ----------------------------
 if __name__=="__main__":
     app = QApplication(sys.argv)
