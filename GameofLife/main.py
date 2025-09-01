@@ -1,8 +1,10 @@
-import sys, numpy as np, json
+import sys, json, numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QLineEdit, QCheckBox, QFileDialog
+    QLineEdit, QComboBox, QCheckBox, QFileDialog
 )
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
@@ -11,13 +13,19 @@ from scipy.ndimage import label
 from scipy.io.wavfile import write
 
 # ----------------------------
+# HIGH-DPI FIX
+# ----------------------------
+QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
+# ----------------------------
 # CELLULAR AUTOMATA CLASS
 # ----------------------------
 class CellularAutomata:
-    def __init__(self, shape=(30,30), density=0.25, birth=[3], survive=[2,3]):
+    def __init__(self, shape=(30,30), density=0.25, birth=[3], survive=[2,3], name="Custom"):
         self.rows, self.cols = shape
         self.birth = birth
         self.survive = survive
+        self.name = name
         self.grid = np.random.rand(self.rows,self.cols)<density
         self.age = np.zeros_like(self.grid, dtype=int)
 
@@ -37,18 +45,26 @@ class CellularAutomata:
                         new_age[i,j]=1
         self.grid=new_grid
         self.age=new_age
-        return self.grid,self.age
+        return self.grid,new_age
 
 # ----------------------------
 # AUDIO GENERATION
 # ----------------------------
-def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics):
+def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics, waveform='sine'):
     t = np.linspace(0,duration,int(rate*duration),endpoint=False)
     signal_left = np.zeros_like(t)
     signal_right = np.zeros_like(t)
     labeled, num_features = label(grid>0)
     max_age = max(1,np.max(ages))
-    rows,cols=grid.shape
+    rows,cols = grid.shape
+
+    def waveform_func(freq, t, type):
+        if type=='sine': return np.sin(2*np.pi*freq*t)
+        elif type=='square': return np.sign(np.sin(2*np.pi*freq*t))
+        elif type=='saw': return 2*(t*freq - np.floor(t*freq + 0.5))
+        elif type=='triangle': return 2*np.abs(2*(t*freq - np.floor(t*freq + 0.5))) -1
+        return np.sin(2*np.pi*freq*t)
+
     for i in range(rows):
         for j in range(cols):
             if grid[i,j]:
@@ -59,13 +75,24 @@ def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics)
                 pan = j/cols
                 cell_signal = np.zeros_like(t)
                 for h in harmonics:
-                    cell_signal += amp*np.sin(2*np.pi*freq*h*t)
+                    cell_signal += amp*waveform_func(freq*h, t, waveform)
                 signal_left += cell_signal*(1-pan)
                 signal_right += cell_signal*pan
+
     max_val = max(np.max(np.abs(signal_left)), np.max(np.abs(signal_right)), 1e-6)
     signal_left/=max_val
     signal_right/=max_val
-    return np.stack([signal_left,signal_right],axis=-1)
+    return np.stack([signal_left, signal_right], axis=-1)
+
+# ----------------------------
+# PROFESSIONAL PRESETS
+# ----------------------------
+PRESETS = {
+    "Conway":{"birth":[3],"survive":[2,3],"waveform":"sine"},
+    "HighLife":{"birth":[3,6],"survive":[2,3],"waveform":"saw"},
+    "Seeds":{"birth":[2],"survive":[],"waveform":"square"},
+    "Brian":{"birth":[2],"survive":[],"waveform":"triangle"}
+}
 
 # ----------------------------
 # QT6 GUI
@@ -73,29 +100,35 @@ def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics)
 class CAStudio(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cellular Automata Studio")
+        self.setWindowTitle("Advanced Cellular Automata Studio")
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
 
-        # Default config
-        self.config = {
-            "grid_size":[30,30], "init_density":0.25, "frames":300, "fps":15,
-            "visual_mode":"cluster", "audio_rate":44100, "audio_chunk_duration":0.05,
-            "base_freq":220, "freq_range":1000, "harmonics":[1,2,3],
-            "birth":[3], "survive":[2,3]
-        }
-        self.ca = CellularAutomata(tuple(self.config['grid_size']),
-                                   self.config['init_density'],
-                                   self.config['birth'], self.config['survive'])
+        # Initialize CA with Conway preset
+        preset = PRESETS["Conway"]
+        self.ca = CellularAutomata(name="Conway", birth=preset["birth"], survive=preset["survive"])
+        self.current_waveform = preset["waveform"]
+
+        # Rule selection
+        self.rule_combo = QComboBox()
+        self.rule_combo.addItems(PRESETS.keys())
+        self.rule_combo.currentTextChanged.connect(self.load_preset)
+        self.layout.addWidget(QLabel("Select Rule Preset:"))
+        self.layout.addWidget(self.rule_combo)
 
         # Dynamic Rule Editor
         rule_layout = QHBoxLayout()
-        self.birth_input = QLineEdit("3")
-        self.survive_input = QLineEdit("2,3")
+        self.birth_input = QLineEdit(",".join(map(str,self.ca.birth)))
+        self.survive_input = QLineEdit(",".join(map(str,self.ca.survive)))
+        self.waveform_combo = QComboBox()
+        self.waveform_combo.addItems(["sine","square","saw","triangle"])
+        self.waveform_combo.setCurrentText(self.current_waveform)
         rule_layout.addWidget(QLabel("Birth (B):"))
         rule_layout.addWidget(self.birth_input)
         rule_layout.addWidget(QLabel("Survive (S):"))
         rule_layout.addWidget(self.survive_input)
+        rule_layout.addWidget(QLabel("Waveform:"))
+        rule_layout.addWidget(self.waveform_combo)
         self.layout.addLayout(rule_layout)
 
         # Controls
@@ -129,23 +162,50 @@ class CAStudio(QWidget):
         self.ax.set_title("Cellular Automata")
         self.anim = None
 
+        # Simulation config
+        self.config_frames = 300
+        self.config_fps = 15
+        self.config_audio_rate = 44100
+        self.config_audio_chunk = 0.05
+        self.config_base_freq = 220
+        self.config_freq_range = 1000
+        self.config_harmonics = [1,2,3]
+
     # ----------------------------
-    # Simulation
+    # Load Preset
+    # ----------------------------
+    def load_preset(self, name):
+        preset = PRESETS[name]
+        self.ca.birth = preset["birth"]
+        self.ca.survive = preset["survive"]
+        self.birth_input.setText(",".join(map(str,preset["birth"])))
+        self.survive_input.setText(",".join(map(str,preset["survive"])))
+        self.waveform_combo.setCurrentText(preset["waveform"])
+        self.current_waveform = preset["waveform"]
+        self.ca.name = name
+
+    # ----------------------------
+    # Update Rules
     # ----------------------------
     def update_rule(self):
         try:
-            birth = [int(x) for x in self.birth_input.text().split(',')]
-            survive = [int(x) for x in self.survive_input.text().split(',')]
-            self.ca.birth=birth
-            self.ca.survive=survive
+            birth = [int(x) for x in self.birth_input.text().split(',') if x]
+            survive = [int(x) for x in self.survive_input.text().split(',') if x]
+            waveform = self.waveform_combo.currentText()
+            self.ca.birth = birth
+            self.ca.survive = survive
+            self.current_waveform = waveform
         except:
-            print("Invalid rule input")
+            print("Invalid input")
 
+    # ----------------------------
+    # Simulation
+    # ----------------------------
     def start_simulation(self):
         self.update_rule()
         self.anim = FuncAnimation(self.figure, self.update_frame,
-                                  frames=self.config['frames'],
-                                  interval=1000/self.config['fps'], blit=True)
+                                  frames=self.config_frames,
+                                  interval=1000/self.config_fps, blit=True)
         self.canvas.draw()
 
     def pause_simulation(self):
@@ -153,61 +213,66 @@ class CAStudio(QWidget):
 
     def update_frame(self, frame):
         grid, age = self.ca.step()
-        # Cluster-based coloring
-        labeled, num_features = label(grid>0)
+        labeled,_ = label(grid>0)
         self.img.set_data(labeled)
         if self.audio_checkbox.isChecked():
-            chunk = generate_audio(grid, age, self.config['audio_rate'],
-                                   self.config['audio_chunk_duration'],
-                                   self.config['base_freq'],
-                                   self.config['freq_range'],
-                                   self.config['harmonics'])
-            sd.play(chunk, self.config['audio_rate'], blocking=False)
+            chunk = generate_audio(grid, age,
+                                   self.config_audio_rate,
+                                   self.config_audio_chunk,
+                                   self.config_base_freq,
+                                   self.config_freq_range,
+                                   self.config_harmonics,
+                                   self.current_waveform)
+            sd.play(chunk, self.config_audio_rate, blocking=False)
         return [self.img]
 
     # ----------------------------
-    # Export
+    # Export Functions
     # ----------------------------
     def export_video_audio(self):
-        video_file, _ = QFileDialog.getSaveFileName(self,"Save Video","","MP4 Files (*.mp4)")
-        audio_file, _ = QFileDialog.getSaveFileName(self,"Save Audio","","WAV Files (*.wav)")
+        video_file,_ = QFileDialog.getSaveFileName(self,"Save Video","","MP4 Files (*.mp4)")
+        audio_file,_ = QFileDialog.getSaveFileName(self,"Save Audio","","WAV Files (*.wav)")
         if video_file and audio_file:
             self.update_rule()
             audio_frames=[]
             fig, ax = plt.subplots(figsize=(6,6))
             img=ax.imshow(self.ca.age, cmap='tab20', interpolation='nearest')
-            writer = FFMpegWriter(fps=self.config['fps'], bitrate=1800)
+            writer = FFMpegWriter(fps=self.config_fps, bitrate=1800)
             with writer.saving(fig, video_file, dpi=100):
-                for f in range(self.config['frames']):
-                    grid, age=self.ca.step()
+                for f in range(self.config_frames):
+                    grid, age = self.ca.step()
                     labeled,_ = label(grid>0)
                     img.set_data(labeled)
                     writer.grab_frame()
-                    chunk = generate_audio(grid, age, self.config['audio_rate'],
-                                           self.config['audio_chunk_duration'],
-                                           self.config['base_freq'],
-                                           self.config['freq_range'],
-                                           self.config['harmonics'])
+                    chunk = generate_audio(grid, age,
+                                           self.config_audio_rate,
+                                           self.config_audio_chunk,
+                                           self.config_base_freq,
+                                           self.config_freq_range,
+                                           self.config_harmonics,
+                                           self.current_waveform)
                     audio_frames.append(chunk)
-            full_audio=np.concatenate(audio_frames,axis=0)
-            write(audio_file, self.config['audio_rate'], (full_audio*32767).astype(np.int16))
+            full_audio = np.concatenate(audio_frames, axis=0)
+            write(audio_file, self.config_audio_rate, (full_audio*32767).astype(np.int16))
             print(f"Exported video: {video_file}, audio: {audio_file}")
 
     def export_audio_only(self):
-        audio_file,_=QFileDialog.getSaveFileName(self,"Save Audio","","WAV Files (*.wav)")
+        audio_file,_ = QFileDialog.getSaveFileName(self,"Save Audio","","WAV Files (*.wav)")
         if audio_file:
             self.update_rule()
             audio_frames=[]
-            for f in range(self.config['frames']):
-                grid, age=self.ca.step()
-                chunk=generate_audio(grid, age, self.config['audio_rate'],
-                                     self.config['audio_chunk_duration'],
-                                     self.config['base_freq'],
-                                     self.config['freq_range'],
-                                     self.config['harmonics'])
+            for f in range(self.config_frames):
+                grid, age = self.ca.step()
+                chunk = generate_audio(grid, age,
+                                       self.config_audio_rate,
+                                       self.config_audio_chunk,
+                                       self.config_base_freq,
+                                       self.config_freq_range,
+                                       self.config_harmonics,
+                                       self.current_waveform)
                 audio_frames.append(chunk)
-            full_audio=np.concatenate(audio_frames,axis=0)
-            write(audio_file, self.config['audio_rate'], (full_audio*32767).astype(np.int16))
+            full_audio = np.concatenate(audio_frames, axis=0)
+            write(audio_file, self.config_audio_rate, (full_audio*32767).astype(np.int16))
             print(f"Exported audio: {audio_file}")
 
 # ----------------------------
