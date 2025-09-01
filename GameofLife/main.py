@@ -1,25 +1,30 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, FFMpegWriter
 import sounddevice as sd
+from scipy.ndimage import uniform_filter, label
+from scipy.io.wavfile import write
 
 # ----------------------------
 # CONFIG
 # ----------------------------
 config = {
-    'grid_size': (40, 40),
+    'grid_size': (50, 50),
     'init_density': 0.25,
-    'frames': 200,
-    'fps': 10,
-    'visual_mode': 'age_color',  # options: 'binary', 'age_color'
+    'frames': 300,
+    'fps': 15,
+    'visual_mode': 'age_color',  # 'binary' or 'age_color'
     'audio_rate': 44100,
-    'audio_chunk_duration': 0.1,  # seconds per step
-    'base_freq': 200,             # Hz
-    'freq_range': 1200,           # Hz
+    'audio_chunk_duration': 0.1,
+    'base_freq': 220,
+    'freq_range': 1000,
+    'harmonics': [1, 2, 3],
+    'output_video': 'game_of_life_final.mp4',
+    'output_audio': 'game_of_life_audio.wav'
 }
 
 # ----------------------------
-# GAME OF LIFE
+# GAME OF LIFE CLASS
 # ----------------------------
 class GameOfLife:
     def __init__(self, shape, density=0.2):
@@ -47,44 +52,61 @@ class GameOfLife:
         return self.grid, self.age
 
 # ----------------------------
-# AUDIO MAPPING
+# AUDIO GENERATION
 # ----------------------------
-def generate_audio_chunk(ages, rate, duration, base_freq, freq_range):
-    """Generate an audio chunk based on cell ages using FFT mapping."""
+def generate_audio(grid, ages, rate, duration, base_freq, freq_range, harmonics):
     t = np.linspace(0, duration, int(rate*duration), endpoint=False)
+    signal_left = np.zeros_like(t)
+    signal_right = np.zeros_like(t)
     
-    # Flatten the ages to map to frequency bins
-    flat_ages = ages.flatten()
-    max_age = max(1, np.max(flat_ages))
+    rows, cols = grid.shape
+    max_age = max(1, np.max(ages))
     
-    # Map ages to frequencies
-    freqs = base_freq + (flat_ages / max_age) * freq_range
+    # Label clusters for waveform/harmonic mapping
+    labeled, num_features = label(grid)
     
-    # Map ages to amplitudes
-    amplitudes = (flat_ages / max_age) * 0.3
+    for i in range(rows):
+        for j in range(cols):
+            if grid[i, j]:
+                cluster = labeled[i, j]
+                cluster_size = np.sum(labeled == cluster)
+                
+                # Frequency: age + cluster size
+                freq = base_freq + (ages[i,j]/max_age)*freq_range + cluster_size*10
+                amp = 0.2 * (ages[i,j]/max_age)
+                pan = j / cols  # stereo panning
+                
+                # Harmonics based on cluster size
+                cell_signal = np.zeros_like(t)
+                for h in harmonics:
+                    cell_signal += amp * np.sin(2*np.pi*freq*h*t)
+                
+                signal_left += cell_signal * (1-pan)
+                signal_right += cell_signal * pan
     
-    # Sum sine waves for each cell
-    signal = np.zeros_like(t)
-    for f, a in zip(freqs, amplitudes):
-        signal += a * np.sin(2 * np.pi * f * t)
-    
-    # Normalize to prevent clipping
-    signal /= np.max(np.abs(signal)) + 1e-6
-    return signal
+    # Normalize
+    max_val = max(np.max(np.abs(signal_left)), np.max(np.abs(signal_right)), 1e-6)
+    signal_left /= max_val
+    signal_right /= max_val
+    stereo_signal = np.stack([signal_left, signal_right], axis=-1)
+    return stereo_signal
 
 # ----------------------------
-# VISUALIZATION
+# VISUALIZATION AND EXPORT
 # ----------------------------
-def visualize_game(game, config):
-    fig, ax = plt.subplots()
-    grid, age = game.step()
+def visualize_and_export(game, config):
+    fig, ax = plt.subplots(figsize=(6,6))
     
+    # Initial frame
+    grid, age = game.step()
     if config['visual_mode'] == 'binary':
         img = ax.imshow(grid, cmap='Greys', interpolation='nearest')
     else:
         img = ax.imshow(age, cmap='viridis', interpolation='nearest')
+    ax.set_title("Game of Life")
+    
+    audio_frames = []
 
-    # Audio stream for real-time playback
     def update(frame):
         grid, age = game.step()
         if config['visual_mode'] == 'binary':
@@ -92,21 +114,26 @@ def visualize_game(game, config):
         else:
             img.set_data(age)
         
-        # Generate audio chunk and play
-        chunk = generate_audio_chunk(age, config['audio_rate'],
-                                     config['audio_chunk_duration'],
-                                     config['base_freq'],
-                                     config['freq_range'])
-        sd.play(chunk, config['audio_rate'], blocking=False)
+        # Generate audio for this frame
+        chunk = generate_audio(grid, age, config['audio_rate'], config['audio_chunk_duration'],
+                               config['base_freq'], config['freq_range'], config['harmonics'])
+        audio_frames.append(chunk)
         return [img]
 
-    anim = FuncAnimation(fig, update, frames=config['frames'],
-                         interval=1000/config['fps'], blit=True)
-    plt.show()
+    writer = FFMpegWriter(fps=config['fps'], metadata=dict(artist='GameOfLife'), bitrate=1800)
+    with writer.saving(fig, config['output_video'], dpi=100):
+        for frame in range(config['frames']):
+            update(frame)
+            writer.grab_frame()
+    
+    # Combine audio frames
+    full_audio = np.concatenate(audio_frames, axis=0)
+    write(config['output_audio'], config['audio_rate'], (full_audio*32767).astype(np.int16))
+    print(f"Exported video to {config['output_video']} and audio to {config['output_audio']}")
 
 # ----------------------------
 # MAIN
 # ----------------------------
 if __name__ == "__main__":
     game = GameOfLife(config['grid_size'], config['init_density'])
-    visualize_game(game, config)
+    visualize_and_export(game, config)
