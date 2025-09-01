@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import random
 from collections import defaultdict
-import matplotlib.colors as mcolors
 
 # -----------------------
 # CONFIGURATION
@@ -47,7 +46,8 @@ class Creature:
 grid = np.zeros((GRID_SIZE, GRID_SIZE), dtype=object)
 lineage_counter = 1
 lineage_history = defaultdict(list)
-lineage_colors = {}  # color per lineage
+lineage_colors = {}
+prey_speeds = defaultdict(list)
 
 def random_color():
     return np.random.rand(3,)
@@ -88,7 +88,6 @@ def get_neighbors(x, y):
 def step():
     global lineage_counter
     new_grid = np.copy(grid)
-    
     positions = [(x, y) for x in range(GRID_SIZE) for y in range(GRID_SIZE)]
     random.shuffle(positions)
     
@@ -148,54 +147,53 @@ def step():
     return new_grid
 
 # -----------------------
-# TRACK LINEAGES
+# RECORD DATA FOR LIVE PLOTS
 # -----------------------
-def record_lineages(step_num):
+def record_data(step_num):
     counts = defaultdict(int)
     for x in range(GRID_SIZE):
         for y in range(GRID_SIZE):
             cell = grid[x, y]
             if cell is not None and cell != 0:
                 counts[cell.lineage_id] += 1
+                if cell.type == PREY:
+                    prey_speeds[cell.lineage_id].append(cell.speed)
     for lineage_id, count in counts.items():
         lineage_history[lineage_id].append((step_num, count))
 
 # -----------------------
-# VISUALIZATION
+# LIVE VISUALIZATION
 # -----------------------
-fig, ax = plt.subplots()
+fig, axs = plt.subplots(1, 2, figsize=(12,6))
 
-def draw_grid(grid):
+def draw_grid():
     img = np.ones((GRID_SIZE, GRID_SIZE, 3))
     for x in range(GRID_SIZE):
         for y in range(GRID_SIZE):
             cell = grid[x, y]
-            if cell is None or cell == 0:
-                img[x, y] = np.array([1,1,1])
-            else:
+            if cell is not None and cell != 0:
                 img[x, y] = lineage_colors[cell.lineage_id]
-    ax.clear()
-    ax.imshow(img)
-    ax.set_xticks([])
-    ax.set_yticks([])
+    axs[0].clear()
+    axs[0].imshow(img)
+    axs[0].set_title("Predator-Prey Grid with Lineages")
+    axs[0].set_xticks([])
+    axs[0].set_yticks([])
+
+def draw_traits(step_num):
+    axs[1].clear()
+    for lineage_id, speeds in prey_speeds.items():
+        if speeds:
+            axs[1].hist(speeds, bins=range(1, max(speeds)+2), alpha=0.5, color=lineage_colors[lineage_id])
+    axs[1].set_title(f"Prey Speed Distribution at Step {step_num}")
+    axs[1].set_xlabel("Speed")
+    axs[1].set_ylabel("Frequency")
 
 def update(frame):
     global grid
     grid = step()
-    record_lineages(frame)
-    draw_grid(grid)
+    record_data(frame)
+    draw_grid()
+    draw_traits(frame)
 
 ani = animation.FuncAnimation(fig, update, frames=STEPS, repeat=False, interval=200)
-plt.show()
-
-# -----------------------
-# PLOT LINEAGE EVOLUTION
-# -----------------------
-plt.figure()
-for lineage_id, history in lineage_history.items():
-    times, counts = zip(*history)
-    plt.plot(times, counts, alpha=0.5, color=lineage_colors[lineage_id])
-plt.xlabel("Step")
-plt.ylabel("Number of Creatures")
-plt.title("Lineage Survival Over Time")
 plt.show()
