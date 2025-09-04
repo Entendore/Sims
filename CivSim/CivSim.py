@@ -2,6 +2,7 @@ import random
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.patches import RegularPolygon, Circle, Rectangle
+from matplotlib.gridspec import GridSpec
 
 # ---------------- Hex Utilities ---------------- #
 HEX_DIRS = [(+1,0), (+1,-1), (0,-1), (-1,0), (-1,+1), (0,+1)]
@@ -151,13 +152,12 @@ class Civilization:
         self.maybe_overthrow(civs,world)
         self.spread_culture()
 
-# ---------------- Drawing Functions ---------------- #
+# ---------------- Drawing ---------------- #
 def draw_hex(ax,q,r,facecolor,border="k",size=1,alpha=0.8,linewidth=1.0):
     x = size*(3**0.5*q + (3**0.5)/2*r)
     y = size*(3/2*r)
-    hex_patch = RegularPolygon((x,y),numVertices=6,radius=size/1.1,orientation=0,
-                               facecolor=facecolor, edgecolor=border, alpha=alpha, linewidth=linewidth)
-    ax.add_patch(hex_patch)
+    ax.add_patch(RegularPolygon((x,y),numVertices=6,radius=size/1.1,
+                                orientation=0, facecolor=facecolor, edgecolor=border, alpha=alpha, linewidth=linewidth))
     return x,y
 
 def draw_resource(ax,q,r,color):
@@ -165,8 +165,8 @@ def draw_resource(ax,q,r,color):
     y = 1*(3/2*r)
     ax.add_patch(Circle((x,y),radius=0.2,color=color,alpha=0.9))
 
-# ---------------- Simulation ---------------- #
-def simulate_hex(names, years=60, map_radius=10):
+# ---------------- Simulation with Charts ---------------- #
+def simulate_hex_with_charts(names, years=60, map_radius=10):
     terrain = {}
     for q in range(-map_radius, map_radius+1):
         for r in range(-map_radius, map_radius+1):
@@ -182,63 +182,74 @@ def simulate_hex(names, years=60, map_radius=10):
     civs = [Civilization(n, q, r) for n, (q, r) in zip(names, starts)]
     world = {list(c.hexes)[0]: c.name for c in civs}
 
-    fig, ax = plt.subplots(figsize=(14,14))
+    # Prepare figure with GridSpec
+    fig = plt.figure(figsize=(16,10))
+    gs = GridSpec(2,2, width_ratios=[2,1])
+    ax_map = fig.add_subplot(gs[:,:1])
+    ax_chart = fig.add_subplot(gs[:,1])
 
     all_qr = list(terrain.keys())
     x_coords = [ (3**0.5*q + (3**0.5)/2*r) for q,r in all_qr ]
     y_coords = [ (3/2*r) for q,r in all_qr ]
     margin = 2
 
+    # Track historical stats for chart
+    history_stats = {c.name: {"population":[],"stability":[],"military":[],"economy":[],"culture":[]} for c in civs}
+
     def update(frame):
-        ax.clear()
-        ax.set_title(f"Year {frame}", fontsize=18)
-        ax.set_aspect('equal')
-        ax.axis('off')
+        ax_map.clear()
+        ax_chart.clear()
+        ax_map.set_title(f"Year {frame}", fontsize=16)
+        ax_map.set_aspect('equal'); ax_map.axis('off')
 
         alive = [c for c in civs if c.alive]
         for civ in alive: civ.step(alive, world, terrain, resources)
 
-        for (q,r),t in terrain.items(): draw_hex(ax,q,r,TERRAINS[t]["color"],size=1,alpha=0.4)
-        for (q,r),res in resources.items(): draw_resource(ax,q,r,RESOURCES[res]["color"])
+        for (q,r),t in terrain.items(): draw_hex(ax_map,q,r,TERRAINS[t]["color"],size=1,alpha=0.4)
+        for (q,r),res in resources.items(): draw_resource(ax_map,q,r,RESOURCES[res]["color"])
 
         for civ in alive:
+            for h in civ.hexes: draw_hex(ax_map,h[0],h[1],civ.color,alpha=0.85,linewidth=1.5)
             for h in civ.hexes:
-                draw_hex(ax,h[0],h[1],civ.color,alpha=0.85,linewidth=1.5)
                 for nq,nr in hex_neighbors(*h):
                     neighbor = world.get((nq,nr))
                     if neighbor:
-                        if neighbor in civ.allies: draw_hex(ax,h[0],h[1],facecolor='none',border='green',alpha=0.7,linewidth=2)
-                        elif neighbor in civ.enemies: draw_hex(ax,h[0],h[1],facecolor='none',border='red',alpha=0.7,linewidth=2)
+                        if neighbor in civ.allies: draw_hex(ax_map,h[0],h[1],facecolor='none',border='green',alpha=0.7,linewidth=2)
+                        elif neighbor in civ.enemies: draw_hex(ax_map,h[0],h[1],facecolor='none',border='red',alpha=0.7,linewidth=2)
 
+        # Cultural overlay
         for (q,r),inf in cultural_map.items():
             if not inf: continue
             dominant = max(inf,key=inf.get)
             strength = min(0.5,inf[dominant]/10)
             color = next((c.color for c in civs if c.name==dominant), "gray")
-            draw_hex(ax,q,r,color,alpha=strength)
+            draw_hex(ax_map,q,r,color,alpha=strength)
 
-        ax.add_patch(Rectangle((max(x_coords)+1, min(y_coords)-1.5), 4, 3, facecolor='white', alpha=0.8, edgecolor='black'))
-        for idx,c in enumerate(alive):
-            ax.add_patch(Rectangle((max(x_coords)+1.05, min(y_coords)-1.4-0.25*idx),0.3,0.2,facecolor=c.color,edgecolor='black'))
-            ax.text(max(x_coords)+1.4, min(y_coords)-1.35-0.25*idx,
-                    f"{c.name} P:{c.population} S:{int(c.stability*100)} M:{int(c.military*100)}", fontsize=9)
+        ax_map.set_xlim(min(x_coords)-margin, max(x_coords)+margin)
+        ax_map.set_ylim(min(y_coords)-margin, max(y_coords)+margin)
+        ax_map.invert_yaxis()
 
-        for i,(evt,ttl) in enumerate(list(event_queue)):
-            ax.text(min(x_coords)-4, max(y_coords)+1.5 - i*0.3, evt, fontsize=12, color='darkred', bbox=dict(facecolor='white',alpha=0.6))
-            event_queue[i] = (evt, ttl-1)
-        while event_queue and event_queue[0][1]<=0: event_queue.pop(0)
+        # Update historical stats
+        for c in civs:
+            history_stats[c.name]["population"].append(c.population)
+            history_stats[c.name]["stability"].append(c.stability)
+            history_stats[c.name]["military"].append(c.military)
+            history_stats[c.name]["economy"].append(c.economy)
+            history_stats[c.name]["culture"].append(c.culture)
 
-        ax.set_xlim(min(x_coords)-margin, max(x_coords)+margin)
-        ax.set_ylim(min(y_coords)-margin, max(y_coords)+margin)
-        ax.invert_yaxis()
+        # Draw chart
+        for c in civs:
+            years_range = range(len(history_stats[c.name]["population"]))
+            ax_chart.plot(years_range, history_stats[c.name]["population"], label=f"{c.name} Pop", color=c.color)
+            ax_chart.plot(years_range, [s*100 for s in history_stats[c.name]["stability"]], label=f"{c.name} Stability", color=c.color, linestyle="--")
+        ax_chart.set_xlabel("Year")
+        ax_chart.set_ylabel("Population / Stability (%)")
+        ax_chart.legend(fontsize=8)
 
     ani = animation.FuncAnimation(fig, update, frames=years, interval=400, repeat=False)
     plt.show()
 
-    print("\n📜 History Log:")
-    for e in history_log: print(" -", e)
-
 # ---------------- Run Simulation ---------------- #
 if __name__=="__main__":
-    civ_names = [generate_civ_name() for _ in range(6)]
-    simulate_hex(civ_names, years=50, map_radius=10)
+    civ_names = [generate_civ_name() for _ in range(5)]
+    simulate_hex_with_charts(civ_names, years=50, map_radius=8)
