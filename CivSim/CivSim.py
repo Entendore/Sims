@@ -304,24 +304,110 @@ def draw_stat_charts(ax,civs):
     ax.legend(loc='upper right')
 
 # ---------------- Update function ---------------- #
+# ---------------- Pre-draw static map ---------------- #
+fig=plt.figure(figsize=(16,8))
+gs=GridSpec(1,2,width_ratios=[3,1])
+ax_map=fig.add_subplot(gs[0])
+ax_chart=fig.add_subplot(gs[1])
+
+# Axes limits to fit all hexes
+ax_map.set_xlim(-map_radius*size*2,map_radius*size*2)
+ax_map.set_ylim(-map_radius*size*2,map_radius*size*2)
+ax_map.set_aspect('equal')
+ax_map.axis('off')
+
+# Pre-draw terrain hexes
+for h,t in terrain.items():
+    draw_hex(ax_map,h[0],h[1],TERRAINS[t]["color"],alpha=1.0,linewidth=1.0,size=size)
+
+# Pre-draw terrain symbols
+for h,t in terrain.items():
+    x, y = hex_to_pixel(*h, size)
+    ax_map.text(x, y + 0.3*size, TERRAINS[t]["symbol"], ha='center', va='center', fontsize=int(10*size))
+
+# Pre-draw static resources
+for h,res in resources.items():
+    x, y = hex_to_pixel(*h, size)
+    ax_map.text(x + 0.35*size, y + 0.35*size, res[0].upper(), ha='center', va='center',
+                fontsize=int(6*size), color=RESOURCES[res]["color"], weight='bold')
+
+# Draw static legend once
+create_legend(ax_map)
+
+# ---------------- Dynamic elements containers ---------------- #
+unit_patches = []
+disaster_texts = []
+trade_lines = []
+
+# ---------------- Update function ---------------- #
 def update(frame):
-    ax_map.clear()
-    draw_terrain_symbols(ax_map, terrain, size)
-    draw_resources_on_hex(ax_map, resources, size)
+    # Remove previous dynamic elements
+    for patch in unit_patches: patch.remove()
+    unit_patches.clear()
+    
+    for txt in disaster_texts: txt.remove()
+    disaster_texts.clear()
+    
+    for line in trade_lines: line.remove()
+    trade_lines.clear()
+
     alive=[c for c in civs if c.alive]
     for civ in alive:
         civ.step(civs, world, terrain, resources)
+        # Draw civ hexes
         for h in civ.hexes:
             draw_hex(ax_map,h[0],h[1],civ.color,alpha=0.85,linewidth=1.5,size=size)
-        draw_hex_overlays(ax_map,civ,resources,size)
-        draw_moving_units(ax_map,civ,size)
-    draw_trade_routes(ax_map, alive, size)
-    draw_disasters(ax_map, size)
-    create_legend(ax_map)
-    draw_civ_info(ax_map, alive, max_hex_x, max_hex_y)
-    draw_stat_charts(ax_chart, alive)
-    ax_map.set_aspect('equal')
-    ax_map.axis('off')
+        # Draw overlays (population, military, stability)
+        for h in civ.hexes:
+            x, y = hex_to_pixel(*h, size)
+            txt1 = ax_map.text(x, y, str(int(civ.military*100)), ha='center', va='center', fontsize=int(8*size), color="red", weight='bold')
+            txt2 = ax_map.text(x, y - 0.35*size, str(civ.population), ha='center', va='center', fontsize=int(6*size))
+            txt3 = ax_map.text(x, y + 0.35*size, f"{int(civ.stability*100)}", ha='center', va='center', fontsize=int(6*size))
+            unit_patches.extend([txt1, txt2, txt3])
 
-ani = animation.FuncAnimation(fig,update,frames=50,interval=1000)
+        # Draw moving units
+        finished=[]
+        for i, move in enumerate(civ.moving_units):
+            fx, fy = hex_to_pixel(*move["from"], size)
+            tx, ty = hex_to_pixel(*move["to"], size)
+            x = fx + (tx-fx)*move["progress"]
+            y = fy + (ty-fy)*move["progress"]
+            circle = ax_map.add_patch(Circle((x, y), radius=0.3*size, color=civ.color, alpha=0.8))
+            unit_patches.append(circle)
+            move["progress"] += 0.2
+            if move["progress"] >= 1.0: finished.append(i)
+        for i in reversed(finished): civ.moving_units.pop(i)
+
+    # Draw disasters
+    finished_disasters=[]
+    for h, (dtype, turns) in active_disasters.items():
+        x, y = hex_to_pixel(*h, size)
+        icons = {"flood":"🌊","drought":"🔥","plague":"☣️","volcano":"🌋"}
+        txt = ax_map.text(x, y, icons[dtype], ha='center', va='center', fontsize=int(10*size))
+        disaster_texts.append(txt)
+        active_disasters[h] = (dtype, turns-1)
+        if turns-1 <= 0: finished_disasters.append(h)
+    for h in finished_disasters: del active_disasters[h]
+
+    # Draw trade routes dynamically
+    for civ in alive:
+        for partner in alive:
+            if partner.name==civ.name: continue
+            if civ.name < partner.name:
+                if civ.trait in ["merchant","peaceful"] and partner.trait in ["merchant","peaceful"]:
+                    q1,r1=random.choice(list(civ.hexes))
+                    q2,r2=random.choice(list(partner.hexes))
+                    x1,y1=hex_to_pixel(q1,r1,size)
+                    x2,y2=hex_to_pixel(q2,r2,size)
+                    line, = ax_map.plot([x1,x2],[y1,y2], linestyle="dotted", color="purple", alpha=0.5, linewidth=1)
+                    trade_lines.append(line)
+
+    # Draw civ info on side
+    ax_map.texts = [t for t in ax_map.texts if t not in unit_patches+disaster_texts]  # remove old info
+    draw_civ_info(ax_map, alive, max_hex_x, max_hex_y)
+
+    # Update stats chart
+    draw_stat_charts(ax_chart, alive)
+
+ani = animation.FuncAnimation(fig, update, frames=50, interval=1000)
 plt.show()
