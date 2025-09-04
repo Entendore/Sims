@@ -33,11 +33,13 @@ def generate_civ_name():
     return random.choice(CIV_PREFIXES) + random.choice(CIV_SUFFIXES)
 
 def generate_splinter_name(parent_name):
-    styles = [f"Neo-{parent_name}", f"The {parent_name} Horde", f"{parent_name} Dominion", f"Free {parent_name}", f"{parent_name} Rebels"]
+    styles = [f"Neo-{parent_name}", f"The {parent_name} Horde", f"{parent_name} Dominion",
+              f"Free {parent_name}", f"{parent_name} Rebels"]
     return random.choice(styles)
 
 def generate_dynasty_name(parent_name):
-    styles = [f"The {parent_name} Empire", f"Kingdom of {parent_name}", f"{parent_name} Dominion", f"New {parent_name}", f"The Grand {parent_name}"]
+    styles = [f"The {parent_name} Empire", f"Kingdom of {parent_name}",
+              f"{parent_name} Dominion", f"New {parent_name}", f"The Grand {parent_name}"]
     return random.choice(styles)
 
 # ---------------- History & Culture ---------------- #
@@ -164,12 +166,12 @@ def draw_resource(ax,q,r,color):
     ax.add_patch(Circle((x,y),radius=0.2,color=color,alpha=0.9))
 
 # ---------------- Simulation ---------------- #
-def simulate_hex(names,years=60,map_radius=10):
+def simulate_hex(names, years=60, map_radius=10):
     terrain = {}
-    for q in range(-map_radius,map_radius+1):
-        for r in range(-map_radius,map_radius+1):
-            if abs(q+r)>map_radius: continue
-            terrain[(q,r)] = random.choices(list(TERRAINS.keys()),weights=[0.4,0.15,0.2,0.15,0.1])[0]
+    for q in range(-map_radius, map_radius+1):
+        for r in range(-map_radius, map_radius+1):
+            if abs(q+r) > map_radius: continue
+            terrain[(q,r)] = random.choices(list(TERRAINS.keys()), weights=[0.4,0.15,0.2,0.15,0.1])[0]
 
     resources = {}
     for h,t in terrain.items():
@@ -178,25 +180,27 @@ def simulate_hex(names,years=60,map_radius=10):
 
     starts = random.sample(list(terrain.keys()), len(names))
     civs = [Civilization(n, q, r) for n, (q, r) in zip(names, starts)]
-    world = {list(c.hexes)[0]: c.name for c in civs}  # FIXED: no pop
-    # No need to add again
+    world = {list(c.hexes)[0]: c.name for c in civs}
 
-    fig,ax = plt.subplots(figsize=(14,14))
+    fig, ax = plt.subplots(figsize=(14,14))
+
+    all_qr = list(terrain.keys())
+    x_coords = [ (3**0.5*q + (3**0.5)/2*r) for q,r in all_qr ]
+    y_coords = [ (3/2*r) for q,r in all_qr ]
+    margin = 2
+
     def update(frame):
         ax.clear()
-        ax.set_title(f"Year {frame}",fontsize=18)
-        ax.set_aspect("equal")
-        ax.axis("off")
+        ax.set_title(f"Year {frame}", fontsize=18)
+        ax.set_aspect('equal')
+        ax.axis('off')
+
         alive = [c for c in civs if c.alive]
-        for civ in alive: civ.step(alive,world,terrain,resources)
+        for civ in alive: civ.step(alive, world, terrain, resources)
 
-        # Terrain
-        for (q,r),t in terrain.items(): draw_hex(ax,q,r,TERRAINS[t]["color"],alpha=0.4)
-
-        # Resources
+        for (q,r),t in terrain.items(): draw_hex(ax,q,r,TERRAINS[t]["color"],size=1,alpha=0.4)
         for (q,r),res in resources.items(): draw_resource(ax,q,r,RESOURCES[res]["color"])
 
-        # Civs & borders
         for civ in alive:
             for h in civ.hexes:
                 draw_hex(ax,h[0],h[1],civ.color,alpha=0.85,linewidth=1.5)
@@ -206,33 +210,35 @@ def simulate_hex(names,years=60,map_radius=10):
                         if neighbor in civ.allies: draw_hex(ax,h[0],h[1],facecolor='none',border='green',alpha=0.7,linewidth=2)
                         elif neighbor in civ.enemies: draw_hex(ax,h[0],h[1],facecolor='none',border='red',alpha=0.7,linewidth=2)
 
-        # Cultural influence
         for (q,r),inf in cultural_map.items():
             if not inf: continue
             dominant = max(inf,key=inf.get)
             strength = min(0.5,inf[dominant]/10)
-            color = next((c.color for c in civs if c.name==dominant),"gray")
+            color = next((c.color for c in civs if c.name==dominant), "gray")
             draw_hex(ax,q,r,color,alpha=strength)
 
-        # Corner legend & stats
-        ax.add_patch(Rectangle((map_radius*1.5,-map_radius*1.5),4,3,facecolor='white',alpha=0.8,edgecolor='black'))
+        ax.add_patch(Rectangle((max(x_coords)+1, min(y_coords)-1.5), 4, 3, facecolor='white', alpha=0.8, edgecolor='black'))
         for idx,c in enumerate(alive):
-            ax.add_patch(Rectangle((map_radius*1.55, -map_radius*1.45-0.25*idx),0.3,0.2,facecolor=c.color,edgecolor='black'))
-            ax.text(map_radius*1.9,-map_radius*1.35-0.25*idx,f"{c.name} P:{c.population} S:{int(c.stability*100)} M:{int(c.military*100)}",fontsize=9)
+            ax.add_patch(Rectangle((max(x_coords)+1.05, min(y_coords)-1.4-0.25*idx),0.3,0.2,facecolor=c.color,edgecolor='black'))
+            ax.text(max(x_coords)+1.4, min(y_coords)-1.35-0.25*idx,
+                    f"{c.name} P:{c.population} S:{int(c.stability*100)} M:{int(c.military*100)}", fontsize=9)
 
-        # Event pop-ups
         for i,(evt,ttl) in enumerate(list(event_queue)):
-            ax.text(-map_radius*1.8, map_radius*1.2 - i*0.3, evt, fontsize=12, color='darkred', bbox=dict(facecolor='white',alpha=0.6))
+            ax.text(min(x_coords)-4, max(y_coords)+1.5 - i*0.3, evt, fontsize=12, color='darkred', bbox=dict(facecolor='white',alpha=0.6))
             event_queue[i] = (evt, ttl-1)
         while event_queue and event_queue[0][1]<=0: event_queue.pop(0)
 
-    ani = animation.FuncAnimation(fig,update,frames=years,interval=400,repeat=False)
+        ax.set_xlim(min(x_coords)-margin, max(x_coords)+margin)
+        ax.set_ylim(min(y_coords)-margin, max(y_coords)+margin)
+        ax.invert_yaxis()
+
+    ani = animation.FuncAnimation(fig, update, frames=years, interval=400, repeat=False)
     plt.show()
 
     print("\n📜 History Log:")
-    for e in history_log: print(" -",e)
+    for e in history_log: print(" -", e)
 
 # ---------------- Run Simulation ---------------- #
 if __name__=="__main__":
     civ_names = [generate_civ_name() for _ in range(6)]
-    simulate_hex(civ_names,years=50,map_radius=10)
+    simulate_hex(civ_names, years=50, map_radius=10)
