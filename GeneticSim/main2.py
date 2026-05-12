@@ -1,16 +1,9 @@
-# --------------------
-# evolution_matplotlib.py
-# --------------------
-import math
-import random
-from matplotlib import pyplot as plt
-from matplotlib import patches
+import math, random
+from matplotlib import pyplot as plt, patches
 from matplotlib.animation import FuncAnimation
 
-# --------------------
-# Lineage Helper
-# --------------------
 TAXONOMY_LEVELS = ["Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"]
+MAX_POPULATION = 100  # population cap
 
 def generate_lineage_name(level, parent_name=None):
     if parent_name:
@@ -18,9 +11,6 @@ def generate_lineage_name(level, parent_name=None):
     else:
         return f"{TAXONOMY_LEVELS[level][:3]}_{random.randint(1,99)}"
 
-# --------------------
-# Creature Class
-# --------------------
 class Creature:
     _id_counter = 0
     def __init__(self, x, y, parent1=None, parent2=None):
@@ -37,124 +27,159 @@ class Creature:
                 (parent1.lineage_color[1] + parent2.lineage_color[1])/2 + random.uniform(-0.05,0.05),
                 (parent1.lineage_color[2] + parent2.lineage_color[2])/2 + random.uniform(-0.05,0.05)
             ]
-            self.lineage_color = [max(0, min(1, c)) for c in self.lineage_color]
+            self.lineage_color = [min(max(c,0),1) for c in self.lineage_color]
+
             self.lineage_hierarchy = []
             for i in range(len(TAXONOMY_LEVELS)):
-                parent_choice = random.choice([parent1, parent2])
-                if random.uniform(0,1) < 0.1:
-                    name = generate_lineage_name(i)
-                else:
-                    name = parent_choice.lineage_hierarchy[i]
+                parent_choice = random.choice([parent1,parent2])
+                name = generate_lineage_name(i) if random.random()<0.1 else parent_choice.lineage_hierarchy[i]
                 self.lineage_hierarchy.append(name)
+
             self.lineage_id = self.lineage_hierarchy[-1]
             self.x = (parent1.x + parent2.x)/2
             self.y = (parent1.y + parent2.y)/2
         else:
-            self.size = random.uniform(10, 30)
-            self.speed = random.uniform(1, 3)
+            self.size = random.uniform(10,30)
+            self.speed = random.uniform(1,3)
             self.x = x
             self.y = y
-            self.lineage_color = [random.uniform(0.2,1), random.uniform(0.2,1), random.uniform(0.2,1)]
+            self.lineage_color = [random.uniform(0.2,1),random.uniform(0.2,1),random.uniform(0.2,1)]
             self.lineage_hierarchy = [generate_lineage_name(i) for i in range(len(TAXONOMY_LEVELS))]
             self.lineage_id = self.lineage_hierarchy[-1]
 
-        self.fitness = 0
-        self.angle = random.uniform(0, 360)
+        self.angle = random.uniform(0,360)
+        self.sides = max(3, int(3 + self.speed*2))
+        self.offsets = [random.uniform(-0.2,0.2) for _ in range(self.sides)]  # stable shape offsets
 
     def move(self, width, height):
-        self.x += math.cos(math.radians(self.angle)) * self.speed
-        self.y += math.sin(math.radians(self.angle)) * self.speed
-        if self.x <= 0 or self.x >= width: self.angle = 180 - self.angle
-        if self.y <= 0 or self.y >= height: self.angle = -self.angle
-        self.x = max(0, min(self.x, width))
-        self.y = max(0, min(self.y, height))
-        self.fitness = math.hypot(self.x - width/2, self.y - height/2)
+        self.x += math.cos(math.radians(self.angle))*self.speed
+        self.y += math.sin(math.radians(self.angle))*self.speed
+
+        if self.x <= 0 or self.x >= width: self.angle = 180 - self.angle + random.uniform(-5,5)
+        if self.y <= 0 or self.y >= height: self.angle = -self.angle + random.uniform(-5,5)
+        self.x = min(max(self.x,0),width)
+        self.y = min(max(self.y,0),height)
 
     def reproduce(self, partner):
-        return Creature(0,0, parent1=self, parent2=partner)
+        return Creature((self.x+partner.x)/2,(self.y+partner.y)/2,parent1=self,parent2=partner)
 
     def get_shape_points(self):
-        sides = int(3 + self.speed*2)
-        points = []
-        for i in range(sides):
-            angle = 2*math.pi*i/sides + math.radians(self.angle)
-            radius = self.size * (0.8 + random.uniform(-0.2,0.2))
+        points=[]
+        for i in range(self.sides):
+            angle = 2*math.pi*i/self.sides + math.radians(self.angle)
+            radius = self.size*(1+self.offsets[i])
             px = self.x + math.cos(angle)*radius
             py = self.y + math.sin(angle)*radius
-            points.append((px, py))
+            points.append((px,py))
         return points
 
-# --------------------
-# Simulation
-# --------------------
 class EvolutionSimulation:
-    def __init__(self, population_size=30, width=800, height=600):
-        self.population_size = population_size
-        self.population = [Creature(random.uniform(0,width), random.uniform(0,height))
-                           for _ in range(population_size)]
-        self.width = width
-        self.height = height
-        self.generation = 0
+    def __init__(self, pop_size=30,width=800,height=600):
+        self.population = [Creature(random.uniform(0,width),random.uniform(0,height)) for _ in range(pop_size)]
+        self.width=width
+        self.height=height
+        self.generation=0
+        self.collision_dist=15
+        self.lineage_nodes={}  # species -> info
+        self.tree_positions={} # species -> (level,y)
+        self.level_next_y = {}  # keeps track of next available y per level
 
     def step(self):
-        for c in self.population:
-            c.move(self.width, self.height)
-        if random.randint(0, 29) == 0:  # evolve every ~30 frames
-            self.evolve()
+        for c in self.population: 
+            c.move(self.width,self.height)
 
-    def evolve(self):
-        self.population.sort(key=lambda c: -c.fitness)
-        survivors = self.population[:self.population_size//2]
-        new_population = []
-        while len(new_population) < self.population_size:
-            p1 = random.choice(survivors)
-            p2 = random.choice(survivors)
-            new_population.append(p1.reproduce(p2))
-        self.population = new_population
-        self.generation += 1
+        new_creatures=[]
+        for i,c1 in enumerate(self.population):
+            for j in range(i+1,len(self.population)):
+                c2=self.population[j]
+                if len(self.population)+len(new_creatures) >= MAX_POPULATION:
+                    break
+                if math.hypot(c1.x-c2.x,c1.y-c2.y) < self.collision_dist and random.random() < 0.3:
+                    child = c1.reproduce(c2)
+                    new_creatures.append(child)
+                    self.register_lineage(child)
+        if new_creatures:
+            self.population.extend(new_creatures)
+            self.generation += 1
+
+    def register_lineage(self, creature):
+        species = creature.lineage_hierarchy[-1]
+        parent_species = creature.parent1.lineage_hierarchy[-1] if creature.parent1 else None
+        level = len(creature.lineage_hierarchy)-1
+        if species not in self.lineage_nodes:
+            self.lineage_nodes[species] = {
+                'parent': parent_species,
+                'color': creature.lineage_color,
+                'level': level,
+                'children': []
+            }
+            if parent_species:
+                self.lineage_nodes[parent_species]['children'].append(species)
+
+        if level not in self.level_next_y:
+            self.level_next_y[level] = 5
+        if species not in self.tree_positions:
+            parent_y = self.tree_positions[parent_species][1] if parent_species and parent_species in self.tree_positions else self.level_next_y[level]
+            y = self.level_next_y[level]
+            self.tree_positions[species] = (level, y)
+            self.level_next_y[level] += 3
 
 # --------------------
-# Matplotlib Visualization
+# Visualization
 # --------------------
 sim = EvolutionSimulation()
+fig, axes = plt.subplots(1,3,figsize=(18,6))
+ax_env, ax_chart, ax_tree = axes
 
-fig, axes = plt.subplots(1,2, figsize=(12,6))
-ax_env, ax_chart = axes
-ax_env.set_xlim(0, sim.width)
-ax_env.set_ylim(0, sim.height)
-ax_env.set_title("Creature Evolution")
+ax_env.set_xlim(0,sim.width)
+ax_env.set_ylim(0,sim.height)
 ax_env.set_aspect('equal')
-ax_chart.set_ylim(0, 50)
-ax_chart.set_xlim(0, 3)
+
+# Bar chart setup
+ax_chart.set_ylim(0,50)
+ax_chart.set_xlim(0,3)
 ax_chart.set_xticks([0,1,2])
 ax_chart.set_xticklabels(['Size','Speed','Blue'])
-bars = ax_chart.bar([0,1,2],[0,0,0], color=['cyan','magenta','blue'])
-ax_chart.set_title("Average Traits")
+bars = ax_chart.bar([0,1,2],[0,0,0],color=['cyan','magenta','blue'])
 
-patches_list = []
+ax_tree.set_xlim(-0.5,7.5)
+ax_tree.set_ylim(0,50)
+ax_tree.set_title("Lineage Tree")
 
 def update(frame):
     ax_env.clear()
-    ax_env.set_xlim(0, sim.width)
-    ax_env.set_ylim(0, sim.height)
+    ax_env.set_xlim(0,sim.width)
+    ax_env.set_ylim(0,sim.height)
     ax_env.set_title(f"Generation {sim.generation}")
+
     sim.step()
 
     # Draw creatures
     for c in sim.population:
         pts = c.get_shape_points()
-        polygon = patches.Polygon(pts, closed=True, color=c.lineage_color)
-        ax_env.add_patch(polygon)
+        ax_env.add_patch(patches.Polygon(pts,closed=True,color=c.lineage_color))
 
-    # Draw average traits
+    # Update bar chart
     avg_size = sum(c.size for c in sim.population)/len(sim.population)
     avg_speed = sum(c.speed for c in sim.population)/len(sim.population)
     avg_blue = sum(c.lineage_color[2] for c in sim.population)/len(sim.population)
-    for rect, val in zip(bars, [avg_size, avg_speed, avg_blue]):
+    for rect,val in zip(bars,[avg_size,avg_speed,avg_blue]):
         rect.set_height(val)
-    ax_chart.relim()
-    ax_chart.autoscale_view()
 
-ani = FuncAnimation(fig, update, frames=200, interval=100)
+    # Draw lineage tree
+    ax_tree.clear()
+    ax_tree.set_xlim(-0.5,7.5)
+    ax_tree.set_ylim(0,max(max(sim.level_next_y.values(),default=10)+5,50))
+    ax_tree.set_title("Lineage Tree")
+    for species, info in sim.lineage_nodes.items():
+        x, y = sim.tree_positions[species]
+        parent = info['parent']
+        if parent and parent in sim.tree_positions:
+            px, py = sim.tree_positions[parent]
+            ax_tree.plot([px, x], [py, y], color='black')
+        ax_tree.add_patch(patches.Rectangle((x-0.4,y-0.4),0.8,0.8,color=info['color']))
+        ax_tree.text(x, y, species, fontsize=8, ha='center', va='center')
+
+ani = FuncAnimation(fig, update, frames=500, interval=100)
 plt.tight_layout()
 plt.show()

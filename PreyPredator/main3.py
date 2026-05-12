@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import random
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 
 # --- CONFIGURATION ---
 WIDTH, HEIGHT = 100, 100
@@ -12,7 +12,6 @@ NUM_PRED1 = 5
 NUM_PRED2 = 2
 FOOD_RESPAWN_RATE = 0.05
 MAX_AGE = 100
-MCTS_SIMULATIONS = 10
 REPRODUCE_ENERGY = 80
 MUTATION_RATE = 0.1
 
@@ -23,44 +22,51 @@ class Food:
         self.y = random.randint(0, HEIGHT-1)
 
 class Agent:
-    def __init__(self, x=None, y=None, speed=None, perception=None, lineage=None):
+    def __init__(self, x=None, y=None, speed=None, perception=None, energy_efficiency=None,
+                 move_strategy=None, lineage=None):
         self.x = x if x is not None else random.randint(0, WIDTH-1)
         self.y = y if y is not None else random.randint(0, HEIGHT-1)
         self.age = 0
         self.energy = 50
         self.speed = speed if speed is not None else random.uniform(1,5)
         self.perception = perception if perception is not None else random.randint(5,20)
+        self.energy_efficiency = energy_efficiency if energy_efficiency is not None else random.uniform(0.5,1.0)
+        self.move_strategy = move_strategy if move_strategy is not None else random.uniform(0,1)
         self.lineage = lineage if lineage else []
 
     def distance(self, other):
         return math.hypot(self.x - other.x, self.y - other.y)
 
-    def move(self, target=None):
+    def move(self, options, **kwargs):
         best_score = -float('inf')
         best_move = (self.x, self.y)
-        for _ in range(MCTS_SIMULATIONS):
-            dx, dy = random.randint(-1,1), random.randint(-1,1)
+        for dx, dy in options:
             nx, ny = max(0, min(WIDTH-1, self.x + dx)), max(0, min(HEIGHT-1, self.y + dy))
-            score = 0
-            if target:
-                dist = math.hypot(nx - target.x, ny - target.y)
-                score = -dist
+            score = self.evaluate_move(nx, ny, **kwargs)
             if score > best_score:
                 best_score = score
                 best_move = (nx, ny)
         self.x, self.y = best_move
         self.age += 1
-        self.energy -= 1
+        self.energy -= self.speed * (1 - self.energy_efficiency)
+
+    def evaluate_move(self, nx, ny, **kwargs):
+        return random.random()
 
     def reproduce(self):
         if self.energy >= REPRODUCE_ENERGY:
             self.energy /= 2
-            child_speed = max(0.1, self.speed + random.uniform(-MUTATION_RATE, MUTATION_RATE))
-            child_perception = max(1, int(self.perception + random.randint(-1,1)))
-            child = self.__class__(speed=child_speed, perception=child_perception, lineage=self.lineage + ['child'])
+            child = self.__class__(
+                speed=max(0.1, self.speed + random.uniform(-MUTATION_RATE, MUTATION_RATE)),
+                perception=max(1, int(self.perception + random.randint(-1,1))),
+                energy_efficiency=max(0.1,min(1.0,self.energy_efficiency + random.uniform(-0.05,0.05))),
+                move_strategy=min(1.0,max(0.0,self.move_strategy + random.uniform(-0.1,0.1))),
+                lineage=self.lineage + ['child']
+            )
             return child
         return None
 
+# --- Subclasses ---
 class Prey(Agent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -72,6 +78,17 @@ class Prey(Agent):
                 self.energy += 20
                 foods.remove(f)
                 return
+
+    def evaluate_move(self, nx, ny, predators1=None, predators2=None, foods=None, **kwargs):
+        flee_score = 0
+        seek_score = 0
+        for pred in (predators1 or []) + (predators2 or []):
+            dist = math.hypot(nx - pred.x, ny - pred.y)
+            if dist < self.perception: flee_score += dist
+        for f in foods or []:
+            dist = math.hypot(nx - f.x, ny - f.y)
+            seek_score -= dist
+        return self.move_strategy * seek_score + (1-self.move_strategy) * flee_score + random.random()*0.1
 
 class Predator1(Agent):
     def __init__(self, **kwargs):
@@ -85,6 +102,17 @@ class Predator1(Agent):
                 preys.remove(p)
                 return
 
+    def evaluate_move(self, nx, ny, preys=None, predators2=None, **kwargs):
+        hunt_score = 0
+        avoid_score = 0
+        for p in preys or []:
+            dist = math.hypot(nx - p.x, ny - p.y)
+            hunt_score -= dist
+        for p2 in predators2 or []:
+            dist = math.hypot(nx - p2.x, ny - p2.y)
+            if dist < self.perception: avoid_score += dist
+        return self.move_strategy * hunt_score + (1-self.move_strategy) * avoid_score + random.random()*0.1
+
 class Predator2(Agent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -97,114 +125,99 @@ class Predator2(Agent):
                 predators1.remove(p)
                 return
 
+    def evaluate_move(self, nx, ny, predators1=None, predators2=None, **kwargs):
+        hunt_score = 0
+        avoid_score = 0
+        for p in predators1 or []:
+            dist = math.hypot(nx - p.x, ny - p.y)
+            hunt_score -= dist
+        for p2 in predators2 or []:
+            dist = math.hypot(nx - p2.x, ny - p2.y)
+            if dist < self.perception: avoid_score += dist
+        return self.move_strategy * hunt_score + (1-self.move_strategy) * avoid_score + random.random()*0.1
+
 # --- INITIALIZATION ---
 foods = [Food() for _ in range(NUM_FOOD)]
 preys = [Prey() for _ in range(NUM_PREY)]
 predators1 = [Predator1() for _ in range(NUM_PRED1)]
 predators2 = [Predator2() for _ in range(NUM_PRED2)]
+moves = [(dx,dy) for dx in [-1,0,1] for dy in [-1,0,1]]
 
-# --- PLOTTING SETUP ---
-fig, (ax_ecosystem, ax_traits) = plt.subplots(1, 2, figsize=(12,6))
-ax_ecosystem.set_xlim(0, WIDTH)
-ax_ecosystem.set_ylim(0, HEIGHT)
-ax_traits.set_xlim(0, 500)
-ax_traits.set_ylim(0, 10)
-ax_traits.set_xlabel("Frame")
-ax_traits.set_ylabel("Average Trait Value")
-lines = {'prey_speed':[], 'pred1_speed':[], 'pred2_speed':[]}
+# --- PLOTTING ---
+fig, axes = plt.subplots(3,2,figsize=(14,14))
+ax_ecosystem = axes[0,0]
+ax_population = axes[0,1]
+ax_speed = axes[1,0]
+ax_perception = axes[1,1]
+ax_efficiency = axes[2,0]
+ax_strategy = axes[2,1]
 
-# --- SIMULATION ---
+pop_history = {'prey':[], 'pred1':[], 'pred2':[]}
+lineage_traits = defaultdict(lambda: {'speed':[], 'perception':[], 'efficiency':[], 'strategy':[]})
 frame_number = 0
 
 def update(frame):
     global frame_number
     frame_number += 1
-    ax_ecosystem.clear()
-    ax_ecosystem.set_xlim(0, WIDTH)
-    ax_ecosystem.set_ylim(0, HEIGHT)
-    ax_traits.clear()
-    ax_traits.set_xlabel("Frame")
-    ax_traits.set_ylabel("Average Trait Value")
+    # Clear axes
+    for ax in [ax_ecosystem, ax_population, ax_speed, ax_perception, ax_efficiency, ax_strategy]:
+        ax.clear()
+
+    # Set limits and labels
+    ax_ecosystem.set_xlim(0, WIDTH); ax_ecosystem.set_ylim(0, HEIGHT)
+    ax_ecosystem.set_title("Ecosystem")
+    ax_population.set_xlabel("Frame"); ax_population.set_ylabel("Population"); ax_population.set_title("Population Over Time")
+    ax_speed.set_xlabel("Frame"); ax_speed.set_ylabel("Avg Speed"); ax_speed.set_title("Lineage Speed")
+    ax_perception.set_xlabel("Frame"); ax_perception.set_ylabel("Avg Perception"); ax_perception.set_title("Lineage Perception")
+    ax_efficiency.set_xlabel("Frame"); ax_efficiency.set_ylabel("Avg Efficiency"); ax_efficiency.set_title("Lineage Energy Efficiency")
+    ax_strategy.set_xlabel("Frame"); ax_strategy.set_ylabel("Avg Strategy"); ax_strategy.set_title("Lineage Move Strategy")
 
     # Spawn food
-    if random.random() < FOOD_RESPAWN_RATE:
-        foods.append(Food())
+    if random.random() < FOOD_RESPAWN_RATE: foods.append(Food())
 
-    # Prey actions
-    for prey in preys[:]:
-        if foods:
-            nearest_food = min(foods, key=lambda f: prey.distance(f))
-            prey.move(target=nearest_food)
-        else:
-            prey.move()
-        prey.eat(foods)
-        child = prey.reproduce()
-        if child:
-            preys.append(child)
-        if prey.energy <= 0 or prey.age > MAX_AGE:
-            preys.remove(prey)
-        else:
-            ax_ecosystem.plot(prey.x, prey.y, 'go')  # green = prey
+    # Update agents
+    for agent_list, kwargs in [(preys, {'predators1':predators1,'predators2':predators2,'foods':foods}),
+                               (predators1, {'preys':preys,'predators2':predators2}),
+                               (predators2, {'predators1':predators1,'predators2':predators2})]:
+        for a in agent_list[:]:
+            a.move(moves, **kwargs)
+            if isinstance(a, Prey): a.eat(foods)
+            elif isinstance(a, Predator1): a.eat(preys)
+            elif isinstance(a, Predator2): a.eat(predators1)
+            child = a.reproduce()
+            if child: agent_list.append(child)
+            if a.energy <=0 or a.age>MAX_AGE: agent_list.remove(a)
 
-    # Predator1 actions
-    for pred in predators1[:]:
-        if preys:
-            nearest_prey = min(preys, key=lambda p: pred.distance(p))
-            pred.move(target=nearest_prey)
-        else:
-            pred.move()
-        pred.eat(preys)
-        child = pred.reproduce()
-        if child:
-            predators1.append(child)
-        if pred.energy <= 0 or pred.age > MAX_AGE:
-            predators1.remove(pred)
-        else:
-            ax_ecosystem.plot(pred.x, pred.y, 'ro')  # red = predator1
+    # Plot ecosystem
+    for f in foods: ax_ecosystem.plot(f.x,f.y,'yo')
+    def plot_agents(agents, color):
+        for a in agents: ax_ecosystem.plot(a.x,a.y,'o',color=color)
+    plot_agents(preys,'green'); plot_agents(predators1,'red'); plot_agents(predators2,'magenta')
 
-    # Predator2 actions
-    for pred in predators2[:]:
-        if predators1:
-            nearest_pred = min(predators1, key=lambda p: pred.distance(p))
-            pred.move(target=nearest_pred)
-        else:
-            pred.move()
-        pred.eat(predators1)
-        child = pred.reproduce()
-        if child:
-            predators2.append(child)
-        if pred.energy <= 0 or pred.age > MAX_AGE:
-            predators2.remove(pred)
-        else:
-            ax_ecosystem.plot(pred.x, pred.y, 'mo')  # magenta = predator2
+    # Population over time
+    pop_history['prey'].append(len(preys))
+    pop_history['pred1'].append(len(predators1))
+    pop_history['pred2'].append(len(predators2))
+    ax_population.plot(pop_history['prey'],'g-',label='Prey')
+    ax_population.plot(pop_history['pred1'],'r-',label='Pred1')
+    ax_population.plot(pop_history['pred2'],'m-',label='Pred2')
+    ax_population.legend()
 
-    # Draw food
-    for f in foods:
-        ax_ecosystem.plot(f.x, f.y, 'yo')  # yellow = food
+    # Update lineage traits
+    for agent_list in [preys,predators1,predators2]:
+        for a in agent_list:
+            lin = tuple(a.lineage)
+            lineage_traits[lin]['speed'].append(a.speed)
+            lineage_traits[lin]['perception'].append(a.perception)
+            lineage_traits[lin]['efficiency'].append(a.energy_efficiency)
+            lineage_traits[lin]['strategy'].append(a.move_strategy)
 
-    # --- TRAIT VISUALIZATION ---
-    if preys:
-        avg_prey_speed = sum([p.speed for p in preys])/len(preys)
-    else:
-        avg_prey_speed = 0
-    if predators1:
-        avg_pred1_speed = sum([p.speed for p in predators1])/len(predators1)
-    else:
-        avg_pred1_speed = 0
-    if predators2:
-        avg_pred2_speed = sum([p.speed for p in predators2])/len(predators2)
-    else:
-        avg_pred2_speed = 0
-
-    lines['prey_speed'].append(avg_prey_speed)
-    lines['pred1_speed'].append(avg_pred1_speed)
-    lines['pred2_speed'].append(avg_pred2_speed)
-
-    ax_traits.plot(lines['prey_speed'], 'g-', label='Prey Speed')
-    ax_traits.plot(lines['pred1_speed'], 'r-', label='Pred1 Speed')
-    ax_traits.plot(lines['pred2_speed'], 'm-', label='Pred2 Speed')
-    ax_traits.legend()
-    ax_traits.set_xlim(0, max(500, frame_number))
+    # Plot traits for each lineage
+    for lin,data in lineage_traits.items():
+        if data['speed']: ax_speed.plot(frame_number,sum(data['speed'])/len(data['speed']),'o')
+        if data['perception']: ax_perception.plot(frame_number,sum(data['perception'])/len(data['perception']),'o')
+        if data['efficiency']: ax_efficiency.plot(frame_number,sum(data['efficiency'])/len(data['efficiency']),'o')
+        if data['strategy']: ax_strategy.plot(frame_number,sum(data['strategy'])/len(data['strategy']),'o')
 
 ani = animation.FuncAnimation(fig, update, frames=500, interval=200)
 plt.show()
