@@ -1,50 +1,78 @@
-# main.py
-from matplotlib.animation import FuncAnimation
-import matplotlib.pyplot as plt
-
-from config import MAX_STEPS, FPS
+# app.py
+import sys
+import numpy as np
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout
+from PySide6.QtCore import QTimer
+from config import FPS
 from environment import Environment
 from state import S, update_stats
-from simulation import step
-from events import step_events
+from simulation import step, step_events
 from audio import AudioEngine, get_active_notes
-from visuals import Visualizer
-from interactions import setup_interactions
+from visuals import CAGridWidget
+from interactions import SettingsPanel, Recorder
 
-# Initialize components
-env = Environment()
-audio_engine = AudioEngine()
-vis = Visualizer()
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Evolutionary Cellular Automata - PySide6")
+        self.resize(1100, 750)
+        central_widget = QWidget(); self.setCentralWidget(central_widget)
+        layout = QHBoxLayout(central_widget)
 
-# Wire up interactions
-setup_interactions(vis.get_fig(), S, vis.get_ax1())
+        self.env = Environment()
+        self.audio_engine = AudioEngine()
+        self.grid_widget = CAGridWidget()
+        self.recorder = Recorder()
+        self.settings_panel = SettingsPanel(S, self.recorder, self.grid_widget)
 
-def update(frame_num):
-    if S['paused']:
-        return [vis.im, vis.pop_line, vis.info_text, vis.div_line, vis.energy_line] + vis.species_lines
+        layout.addWidget(self.grid_widget, 3)
+        layout.addWidget(self.settings_panel, 1)
 
-    S['generation'] += 1
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_step)
+        self.timer.start(int(1000 / FPS))
 
-    # Core simulation steps
-    step(S, env.zone_energy_map, env.zone_harshness_map)
-    step_events(S, env)
-    total_pop, sp_pops, diversity, avg_e = update_stats(S)
+    def update_step(self):
+        if S['paused']:
+            if S['recording']:
+                audio_buf = self.audio_engine.get_current_buffer() if S['sound_on'] else None
+                self.recorder.capture_frame(S, self.env, audio_buf)
+            return
 
-    # Audio mapping and synthesis
-    notes = get_active_notes(S, env.note_map)
-    audio_engine.synthesize(notes, S['volume'])
+        S['generation'] += 1
+        step(S, self.env.zone_energy_map, self.env.zone_harshness_map)
+        step_events(S, self.env)
+        total_pop, sp_pops, diversity, avg_e = update_stats(S)
 
-    # Update matplotlib visuals
-    vis.render_grid(S, env)
-    vis.update_plots(S, total_pop, sp_pops, diversity, avg_e)
+        notes = get_active_notes(S, self.env.note_map)
+        self.audio_engine.synthesize(notes, S['volume'], S['sound_on'])
 
-    return [vis.im, vis.pop_line, vis.info_text, vis.div_line, vis.energy_line] + vis.species_lines
+        self.grid_widget.update_grid(S, self.env)
+        self.settings_panel.update_stats_display(total_pop, sp_pops, diversity, avg_e, S['generation'])
+
+        if S['recording']:
+            audio_buf = self.audio_engine.get_current_buffer() if S['sound_on'] else None
+            self.recorder.capture_frame(S, self.env, audio_buf)
+
+    def closeEvent(self, event):
+        self.timer.stop(); self.audio_engine.stop()
+        if S['recording']: self.recorder.stop()
+        event.accept()
 
 if __name__ == '__main__':
-    audio_engine.start()
-    
-    anim = FuncAnimation(vis.get_fig(), update, frames=MAX_STEPS,
-                         interval=1000 / FPS, blit=False, repeat=True)
-    plt.show()
-    
-    audio_engine.stop()
+    app = QApplication(sys.argv)
+    app.setStyleSheet("""
+        QWidget { background-color: #1e1e2e; color: #cdd6f4; font-size: 14px; }
+        QGroupBox { border: 1px solid #45475a; border-radius: 5px; margin-top: 10px; padding-top: 15px; }
+        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }
+        QPushButton { background-color: #313244; border: 1px solid #45475a; border-radius: 4px; padding: 5px; }
+        QPushButton:hover { background-color: #45475a; }
+        QSlider::groove:horizontal { height: 6px; background: #313244; border-radius: 3px; }
+        QSlider::handle:horizontal { width: 10px; margin: -2px 0; background: #89b4fa; border-radius: 5px; }
+        QCheckBox::indicator { width: 16px; height: 16px; }
+        QComboBox { background-color: #313244; border: 1px solid #45475a; border-radius: 4px; padding: 4px; }
+        QComboBox::drop-down { border: none; }
+    """)
+    window = MainWindow(); window.show()
+    window.audio_engine.start()
+    sys.exit(app.exec())

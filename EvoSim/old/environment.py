@@ -1,17 +1,16 @@
 # environment.py
 import numpy as np
-from config import GRID_SIZE, ZONE_SIZE, BASE_MIDI_NOTE, SCALES, SCALE_NAMES
+from Sims.EvoSim.old.config import GRID_SIZE, ZONE_SIZE, BASE_MIDI_NOTE, SCALES, SCALE_NAMES
 
 class Environment:
     def __init__(self):
         self.num_zones_x = (GRID_SIZE + ZONE_SIZE - 1) // ZONE_SIZE
         self.num_zones_y = (GRID_SIZE + ZONE_SIZE - 1) // ZONE_SIZE
-
-        self.zones_energy = np.random.uniform(0.02, 0.07, (self.num_zones_x, self.num_zones_y))
-        self.zones_harshness = np.random.uniform(0.0, 0.15, (self.num_zones_x, self.num_zones_y))
-        preferred = ['pentatonic_minor', 'pentatonic_major', 'dorian']
-        self.zones_scale_key = np.random.choice(preferred, (self.num_zones_x, self.num_zones_y))
-
+        
+        self.zones_energy = np.random.uniform(0.01, 0.06, (self.num_zones_x, self.num_zones_y))
+        self.zones_harshness = np.random.uniform(0.0, 0.20, (self.num_zones_x, self.num_zones_y))
+        self.zones_scale_key = np.random.choice(SCALE_NAMES, (self.num_zones_x, self.num_zones_y))
+        
         self.zone_energy_map = self.expand(self.zones_energy)
         self.zone_harshness_map = self.expand(self.zones_harshness)
         self.note_map = self._build_note_map()
@@ -21,13 +20,15 @@ class Environment:
         out = np.zeros((gs, gs), dtype=np.float64)
         for x in range(gs):
             for y in range(gs):
-                out[x, y] = zones[min(x // zs, zones.shape[0] - 1), min(y // zs, zones.shape[1] - 1)]
+                out[x, y] = zones[min(x // zs, zones.shape[0] - 1),
+                                  min(y // zs, zones.shape[1] - 1)]
         return out
 
     def expand(self, zones):
         try:
             from scipy.ndimage import zoom as _scipy_zoom
-            fx, fy = GRID_SIZE / zones.shape[0], GRID_SIZE / zones.shape[1]
+            fx = GRID_SIZE / zones.shape[0]
+            fy = GRID_SIZE / zones.shape[1]
             return _scipy_zoom(zones.astype(np.float64), (fx, fy), order=1)[:GRID_SIZE, :GRID_SIZE]
         except ImportError:
             return self._expand_nearest(zones)
