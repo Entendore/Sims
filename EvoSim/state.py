@@ -1,11 +1,15 @@
 # state.py
 import numpy as np
 from collections import deque
-from config import GRID_SIZE, NUM_SPECIES, DISASTER_INTERVAL, RESOURCE_PULSE_INTERVAL, MASTER_VOLUME, MUTATION_RATE
+from config import (GRID_SIZE, NUM_SPECIES, DISASTER_INTERVAL,
+                    RESOURCE_PULSE_INTERVAL, MASTER_VOLUME, MUTATION_RATE,
+                    BRUSH_RADIUS_DEFAULT, INIT_DENSITY_DEFAULT, WARMTH_ALPHA)
 
-def init_state() -> dict:
+def init_state(density=None) -> dict:
+    if density is None:
+        density = INIT_DENSITY_DEFAULT
     s = {}
-    s['alive']   = np.random.rand(GRID_SIZE, GRID_SIZE) < 0.10
+    s['alive']   = np.random.rand(GRID_SIZE, GRID_SIZE) < density
     s['age']     = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)
     s['energy']  = np.random.uniform(0.15, 0.45, (GRID_SIZE, GRID_SIZE)).astype(np.float32)
     s['stage']   = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.int8)
@@ -23,10 +27,21 @@ def init_state() -> dict:
     s['pulse_cd']     = RESOURCE_PULSE_INTERVAL + np.random.randint(-10, 20)
     s['paused']       = False
     s['show_zones']   = False
+    s['show_energy']  = False
     s['volume']       = MASTER_VOLUME
     s['mutation_rate']= MUTATION_RATE
     s['sound_on']     = True
     s['recording']    = False
+
+    # --- New settings ---
+    s['sim_speed']      = 1        # 1-5 steps per frame
+    s['brush_radius']   = BRUSH_RADIUS_DEFAULT
+    s['init_density']   = density  # 0.05-0.50
+    s['reverb_mix']     = 1.0      # 0.0-1.0
+    s['warmth']         = (WARMTH_ALPHA - 0.5) / 0.5  # maps alpha 0.5-1.0 → 0.0-1.0; default ~0.76
+    s['bloom_on']       = True
+    s['bloom_strength'] = 0.40     # 0.0-1.0
+    s['disaster_freq']  = 1.0      # 0.0-2.0 multiplier (0 = never)
 
     s['pop_history']     = deque(maxlen=300)
     s['species_hist']    = [deque(maxlen=300) for _ in range(NUM_SPECIES)]

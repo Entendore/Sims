@@ -1,7 +1,7 @@
 # config.py
 import numpy as np
 
-# --- Configurations ---
+# --- Grid & Simulation ---
 GRID_SIZE            = 60
 FPS                  = 15
 SAMPLE_RATE          = 44100
@@ -12,7 +12,8 @@ ZONE_SIZE            = 12
 NUM_SPECIES          = 4
 MAX_VOICES           = 20
 MASTER_VOLUME        = 0.65
-BRUSH_RADIUS         = 3
+BRUSH_RADIUS_DEFAULT = 3
+INIT_DENSITY_DEFAULT = 0.10
 
 DISASTER_INTERVAL    = 120
 RESOURCE_PULSE_INTERVAL = 80
@@ -39,6 +40,7 @@ SCALES = {
     'dorian':           [0, 2, 3, 5, 7, 9, 10],
     'mixolydian':       [0, 2, 4, 5, 7, 9, 10],
     'blues':            [0, 3, 5, 6, 7, 10],
+    'chromatic':        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
 }
 SCALE_NAMES = list(SCALES.keys())
 

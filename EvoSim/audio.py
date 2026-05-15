@@ -2,7 +2,7 @@
 import numpy as np
 import sounddevice as sd
 from config import (SAMPLE_RATE, DURATION_PER_FRAME, MAX_VOICES, NUM_SPECIES,
-                    BASE_MIDI_NOTE, REVERB_TAPS, WARMTH_ALPHA, GRID_SIZE, midi_to_freq)
+                    BASE_MIDI_NOTE, REVERB_TAPS, GRID_SIZE, midi_to_freq)
 
 _WT_LEN = 2048
 _t = np.linspace(0, 1, _WT_LEN, endpoint=False, dtype=np.float32)
@@ -29,7 +29,12 @@ class DelayReverb:
         self.decays = [dc for _, dc in taps]
         self.buffers = [np.zeros(dl, dtype=np.float32) for dl in self.delays]
         self.ptrs = [0] * len(self.delays)
-        self.wet_gain = 0.30 / max(len(taps), 1)
+        self._base_wet_gain = 0.30 / max(len(taps), 1)
+        self.wet_gain = self._base_wet_gain
+
+    def set_mix(self, mix: float):
+        """mix: 0.0 = dry only, 1.0 = full reverb"""
+        self.wet_gain = self._base_wet_gain * max(0.0, min(2.0, mix))
 
     def process(self, block: np.ndarray) -> np.ndarray:
         n = len(block)
@@ -64,7 +69,13 @@ class AudioEngine:
         self.lpf_state = 0.0
         self.stream = None
 
-    def synthesize(self, active_notes, volume, sound_on):
+    def synthesize(self, active_notes, volume, sound_on, reverb_mix=1.0, warmth=0.76):
+        # Update reverb mix
+        self.reverb.set_mix(reverb_mix)
+
+        # Map warmth (0-1) to alpha (0.5-1.0): higher warmth = more smoothing
+        alpha = 0.5 + 0.5 * warmth
+
         new = np.zeros(self.frame_samples, dtype=np.float32)
         if sound_on and active_notes:
             if len(active_notes) > MAX_VOICES:
@@ -89,7 +100,6 @@ class AudioEngine:
             signal *= self.frame_env
             signal = self.reverb.process(signal.astype(np.float32)).astype(np.float64)
 
-            alpha = WARMTH_ALPHA
             out = np.empty_like(signal)
             out[0] = alpha * signal[0] + (1 - alpha) * self.lpf_state
             for i in range(1, len(signal)):
